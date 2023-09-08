@@ -64,7 +64,7 @@ def query_jobs_insert(
     job_config: Optional[job.QueryJobConfig],
     job_id: Optional[str],
     job_id_prefix: Optional[str],
-    location: Optional[str],
+    location: str,
     project: str,
     retry: retries.Retry,
     timeout: Optional[float],
@@ -105,7 +105,7 @@ def query_jobs_insert(
                     timeout=timeout,
                 )
             except core_exceptions.GoogleAPIError:  # (includes RetryError)
-                raise
+                raise create_exc
             else:
                 return query_job
         else:
@@ -215,7 +215,7 @@ def query_jobs_query(
     client: "Client",
     query: str,
     job_config: Optional[job.QueryJobConfig],
-    location: Optional[str],
+    location: str,
     project: str,
     retry: retries.Retry,
     timeout: Optional[float],

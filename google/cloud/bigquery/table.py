@@ -29,15 +29,7 @@ try:
 except ImportError:  # pragma: NO COVER
     pandas = None
 
-try:
-    import pyarrow  # type: ignore
-except ImportError:  # pragma: NO COVER
-    pyarrow = None
-
-try:
-    import db_dtypes  # type: ignore
-except ImportError:  # pragma: NO COVER
-    db_dtypes = None
+import pyarrow  # type: ignore
 
 try:
     import geopandas  # type: ignore
@@ -47,12 +39,11 @@ else:
     _COORDINATE_REFERENCE_SYSTEM = "EPSG:4326"
 
 try:
-    import shapely  # type: ignore
-    from shapely import wkt  # type: ignore
+    import shapely.geos  # type: ignore
 except ImportError:
     shapely = None
 else:
-    _read_wkt = wkt.loads
+    _read_wkt = shapely.geos.WKTReader(shapely.geos.lgeos).read
 
 import google.api_core.exceptions
 from google.api_core.page_iterator import HTTPIterator
@@ -60,8 +51,6 @@ from google.api_core.page_iterator import HTTPIterator
 import google.cloud._helpers  # type: ignore
 from google.cloud.bigquery import _helpers
 from google.cloud.bigquery import _pandas_helpers
-from google.cloud.bigquery.enums import DefaultPandasDTypes
-from google.cloud.bigquery.exceptions import LegacyBigQueryStorageError
 from google.cloud.bigquery.schema import _build_schema_resource
 from google.cloud.bigquery.schema import _parse_schema_resource
 from google.cloud.bigquery.schema import _to_schema_fields
@@ -73,9 +62,8 @@ if typing.TYPE_CHECKING:  # pragma: NO COVER
     # Unconditionally import optional dependencies again to tell pytype that
     # they are not None, avoiding false "no attribute" errors.
     import pandas
-    import pyarrow
-    import geopandas  # type: ignore
-    from google.cloud import bigquery_storage  # type: ignore
+    import geopandas
+    from google.cloud import bigquery_storage
     from google.cloud.bigquery.dataset import DatasetReference
 
 
@@ -83,21 +71,12 @@ _NO_GEOPANDAS_ERROR = (
     "The geopandas library is not installed, please install "
     "geopandas to use the to_geodataframe() function."
 )
-_NO_PYARROW_ERROR = (
-    "The pyarrow library is not installed, please install "
-    "pyarrow to use the to_arrow() function."
-)
 _NO_SHAPELY_ERROR = (
     "The shapely library is not installed, please install "
     "shapely to use the geography_as_object option."
 )
 
 _TABLE_HAS_NO_SCHEMA = 'Table has no schema:  call "client.get_table()"'
-
-_NO_SUPPORTED_DTYPE = (
-    "The dtype cannot to be converted to a pandas ExtensionArray "
-    "because the necessary `__from_arrow__` attribute is missing."
-)
 
 
 def _reference_getter(table):
@@ -228,7 +207,7 @@ class TableReference(_TableBase):
 
     @classmethod
     def from_string(
-        cls, table_id: str, default_project: Optional[str] = None
+        cls, table_id: str, default_project: str = None
     ) -> "TableReference":
         """Construct a table reference from table ID string.
 
@@ -377,7 +356,6 @@ class Table(_TableBase):
         "time_partitioning": "timePartitioning",
         "schema": "schema",
         "snapshot_definition": "snapshotDefinition",
-        "clone_definition": "cloneDefinition",
         "streaming_buffer": "streamingBuffer",
         "self_link": "selfLink",
         "time_partitioning": "timePartitioning",
@@ -687,11 +665,7 @@ class Table(_TableBase):
 
         if self.time_partitioning is None:
             self._properties[api_field] = {"type": TimePartitioningType.DAY}
-
-        if value is None:
-            self._properties[api_field]["expirationMs"] = None
-        else:
-            self._properties[api_field]["expirationMs"] = str(value)
+        self._properties[api_field]["expirationMs"] = str(value)
 
     @property
     def clustering_fields(self):
@@ -954,19 +928,6 @@ class Table(_TableBase):
         if snapshot_info is not None:
             snapshot_info = SnapshotDefinition(snapshot_info)
         return snapshot_info
-
-    @property
-    def clone_definition(self) -> Optional["CloneDefinition"]:
-        """Information about the clone. This value is set via clone creation.
-
-        See: https://cloud.google.com/bigquery/docs/reference/rest/v2/tables#Table.FIELDS.clone_definition
-        """
-        clone_info = self._properties.get(
-            self._PROPERTY_TO_API_FIELD["clone_definition"]
-        )
-        if clone_info is not None:
-            clone_info = CloneDefinition(clone_info)
-        return clone_info
 
     @classmethod
     def from_string(cls, full_table_id: str) -> "Table":
@@ -1343,29 +1304,6 @@ class SnapshotDefinition:
             )
 
 
-class CloneDefinition:
-    """Information about base table and clone time of the clone.
-
-    See https://cloud.google.com/bigquery/docs/reference/rest/v2/tables#clonedefinition
-
-    Args:
-        resource: Clone definition representation returned from the API.
-    """
-
-    def __init__(self, resource: Dict[str, Any]):
-        self.base_table_reference = None
-        if "baseTableReference" in resource:
-            self.base_table_reference = TableReference.from_api_repr(
-                resource["baseTableReference"]
-            )
-
-        self.clone_time = None
-        if "cloneTime" in resource:
-            self.clone_time = google.cloud._helpers._rfc3339_to_datetime(
-                resource["cloneTime"]
-            )
-
-
 class Row(object):
     """A BigQuery row.
 
@@ -1445,7 +1383,7 @@ class Row(object):
             >>> Row(('a', 'b'), {'x': 0, 'y': 1}).get('z')
             None
 
-            The default value can be overridden with the ``default`` parameter.
+            The default value can be overrided with the ``default`` parameter.
 
             >>> Row(('a', 'b'), {'x': 0, 'y': 1}).get('z', '')
             ''
@@ -1609,17 +1547,6 @@ class RowIterator(HTTPIterator):
         if self.max_results is not None:
             return False
 
-        try:
-            from google.cloud import bigquery_storage  # noqa: F401
-        except ImportError:
-            return False
-
-        try:
-            _helpers.BQ_STORAGE_VERSIONS.verify_version()
-        except LegacyBigQueryStorageError as exc:
-            warnings.warn(str(exc))
-            return False
-
         return True
 
     def _get_next_page_response(self):
@@ -1689,7 +1616,7 @@ class RowIterator(HTTPIterator):
 
     def to_arrow_iterable(
         self,
-        bqstorage_client: Optional["bigquery_storage.BigQueryReadClient"] = None,
+        bqstorage_client: "bigquery_storage.BigQueryReadClient" = None,
         max_queue_size: int = _pandas_helpers._MAX_QUEUE_SIZE_DEFAULT,  # type: ignore
     ) -> Iterator["pyarrow.RecordBatch"]:
         """[Beta] Create an iterable of class:`pyarrow.RecordBatch`, to process the table as a stream.
@@ -1745,7 +1672,7 @@ class RowIterator(HTTPIterator):
     # changes to job.QueryJob.to_arrow()
     def to_arrow(
         self,
-        progress_bar_type: Optional[str] = None,
+        progress_bar_type: str = None,
         bqstorage_client: Optional["bigquery_storage.BigQueryReadClient"] = None,
         create_bqstorage_client: bool = True,
     ) -> "pyarrow.Table":
@@ -1764,9 +1691,9 @@ class RowIterator(HTTPIterator):
                   No progress bar.
                 ``'tqdm'``
                   Use the :func:`tqdm.tqdm` function to print a progress bar
-                  to :data:`sys.stdout`.
+                  to :data:`sys.stderr`.
                 ``'tqdm_notebook'``
-                  Use the :func:`tqdm.notebook.tqdm` function to display a
+                  Use the :func:`tqdm.tqdm_notebook` function to display a
                   progress bar as a Jupyter notebook widget.
                 ``'tqdm_gui'``
                   Use the :func:`tqdm.tqdm_gui` function to display a
@@ -1796,15 +1723,8 @@ class RowIterator(HTTPIterator):
                 headers from the query results. The column headers are derived
                 from the destination table's schema.
 
-        Raises:
-            ValueError: If the :mod:`pyarrow` library cannot be imported.
-
-
         .. versionadded:: 1.17.0
         """
-        if pyarrow is None:
-            raise ValueError(_NO_PYARROW_ERROR)
-
         self._maybe_warn_max_results(bqstorage_client)
 
         if not self._validate_bqstorage(bqstorage_client, create_bqstorage_client):
@@ -1932,17 +1852,9 @@ class RowIterator(HTTPIterator):
         self,
         bqstorage_client: Optional["bigquery_storage.BigQueryReadClient"] = None,
         dtypes: Dict[str, Any] = None,
-        progress_bar_type: Optional[str] = None,
+        progress_bar_type: str = None,
         create_bqstorage_client: bool = True,
         geography_as_object: bool = False,
-        bool_dtype: Union[Any, None] = DefaultPandasDTypes.BOOL_DTYPE,
-        int_dtype: Union[Any, None] = DefaultPandasDTypes.INT_DTYPE,
-        float_dtype: Union[Any, None] = None,
-        string_dtype: Union[Any, None] = None,
-        date_dtype: Union[Any, None] = DefaultPandasDTypes.DATE_DTYPE,
-        datetime_dtype: Union[Any, None] = None,
-        time_dtype: Union[Any, None] = DefaultPandasDTypes.TIME_DTYPE,
-        timestamp_dtype: Union[Any, None] = None,
     ) -> "pandas.DataFrame":
         """Create a pandas DataFrame by loading all pages of a query.
 
@@ -1972,16 +1884,15 @@ class RowIterator(HTTPIterator):
                   No progress bar.
                 ``'tqdm'``
                   Use the :func:`tqdm.tqdm` function to print a progress bar
-                  to :data:`sys.stdout`.
+                  to :data:`sys.stderr`.
                 ``'tqdm_notebook'``
-                  Use the :func:`tqdm.notebook.tqdm` function to display a
+                  Use the :func:`tqdm.tqdm_notebook` function to display a
                   progress bar as a Jupyter notebook widget.
                 ``'tqdm_gui'``
                   Use the :func:`tqdm.tqdm_gui` function to display a
                   progress bar as a graphical dialog box.
 
                 .. versionadded:: 1.11.0
-
             create_bqstorage_client (Optional[bool]):
                 If ``True`` (default), create a BigQuery Storage API client
                 using the default API settings. The BigQuery Storage API
@@ -1999,89 +1910,6 @@ class RowIterator(HTTPIterator):
 
                 .. versionadded:: 2.24.0
 
-            bool_dtype (Optional[pandas.Series.dtype, None]):
-                If set, indicate a pandas ExtensionDtype (e.g. ``pandas.BooleanDtype()``)
-                to convert BigQuery Boolean type, instead of relying on the default
-                ``pandas.BooleanDtype()``. If you explicitly set the value to ``None``,
-                then the data type will be ``numpy.dtype("bool")``. BigQuery Boolean
-                type can be found at:
-                https://cloud.google.com/bigquery/docs/reference/standard-sql/data-types#boolean_type
-
-                .. versionadded:: 3.8.0
-
-            int_dtype (Optional[pandas.Series.dtype, None]):
-                If set, indicate a pandas ExtensionDtype (e.g. ``pandas.Int64Dtype()``)
-                to convert BigQuery Integer types, instead of relying on the default
-                ``pandas.Int64Dtype()``. If you explicitly set the value to ``None``,
-                then the data type will be ``numpy.dtype("int64")``. A list of BigQuery
-                Integer types can be found at:
-                https://cloud.google.com/bigquery/docs/reference/standard-sql/data-types#integer_types
-
-                .. versionadded:: 3.8.0
-
-            float_dtype (Optional[pandas.Series.dtype, None]):
-                If set, indicate a pandas ExtensionDtype (e.g. ``pandas.Float32Dtype()``)
-                to convert BigQuery Float type, instead of relying on the default
-                ``numpy.dtype("float64")``. If you explicitly set the value to ``None``,
-                then the data type will be ``numpy.dtype("float64")``. BigQuery Float
-                type can be found at:
-                https://cloud.google.com/bigquery/docs/reference/standard-sql/data-types#floating_point_types
-
-                .. versionadded:: 3.8.0
-
-            string_dtype (Optional[pandas.Series.dtype, None]):
-                If set, indicate a pandas ExtensionDtype (e.g. ``pandas.StringDtype()``) to
-                convert BigQuery String type, instead of relying on the default
-                ``numpy.dtype("object")``. If you explicitly set the value to ``None``,
-                then the data type will be ``numpy.dtype("object")``. BigQuery String
-                type can be found at:
-                https://cloud.google.com/bigquery/docs/reference/standard-sql/data-types#string_type
-
-                .. versionadded:: 3.8.0
-
-            date_dtype (Optional[pandas.Series.dtype, None]):
-                If set, indicate a pandas ExtensionDtype (e.g.
-                ``pandas.ArrowDtype(pyarrow.date32())``) to convert BigQuery Date
-                type, instead of relying on the default ``db_dtypes.DateDtype()``.
-                If you explicitly set the value to ``None``, then the data type will be
-                ``numpy.dtype("datetime64[ns]")`` or ``object`` if out of bound. BigQuery
-                Date type can be found at:
-                https://cloud.google.com/bigquery/docs/reference/standard-sql/data-types#date_type
-
-                .. versionadded:: 3.10.0
-
-            datetime_dtype (Optional[pandas.Series.dtype, None]):
-                If set, indicate a pandas ExtensionDtype (e.g.
-                ``pandas.ArrowDtype(pyarrow.timestamp("us"))``) to convert BigQuery Datetime
-                type, instead of relying on the default ``numpy.dtype("datetime64[ns]``.
-                If you explicitly set the value to ``None``, then the data type will be
-                ``numpy.dtype("datetime64[ns]")`` or ``object`` if out of bound. BigQuery
-                Datetime type can be found at:
-                https://cloud.google.com/bigquery/docs/reference/standard-sql/data-types#datetime_type
-
-                .. versionadded:: 3.10.0
-
-            time_dtype (Optional[pandas.Series.dtype, None]):
-                If set, indicate a pandas ExtensionDtype (e.g.
-                ``pandas.ArrowDtype(pyarrow.time64("us"))``) to convert BigQuery Time
-                type, instead of relying on the default ``db_dtypes.TimeDtype()``.
-                If you explicitly set the value to ``None``, then the data type will be
-                ``numpy.dtype("object")``. BigQuery Time type can be found at:
-                https://cloud.google.com/bigquery/docs/reference/standard-sql/data-types#time_type
-
-                .. versionadded:: 3.10.0
-
-            timestamp_dtype (Optional[pandas.Series.dtype, None]):
-                If set, indicate a pandas ExtensionDtype (e.g.
-                ``pandas.ArrowDtype(pyarrow.timestamp("us", tz="UTC"))``) to convert BigQuery Timestamp
-                type, instead of relying on the default ``numpy.dtype("datetime64[ns, UTC]")``.
-                If you explicitly set the value to ``None``, then the data type will be
-                ``numpy.dtype("datetime64[ns, UTC]")`` or ``object`` if out of bound. BigQuery
-                Datetime type can be found at:
-                https://cloud.google.com/bigquery/docs/reference/standard-sql/data-types#timestamp_type
-
-                .. versionadded:: 3.10.0
-
         Returns:
             pandas.DataFrame:
                 A :class:`~pandas.DataFrame` populated with row data and column
@@ -2094,54 +1922,13 @@ class RowIterator(HTTPIterator):
                 the :mod:`google.cloud.bigquery_storage_v1` module is
                 required but cannot be imported.  Also if
                 `geography_as_object` is `True`, but the
-                :mod:`shapely` library cannot be imported. Also if
-                `bool_dtype`, `int_dtype` or other dtype parameters
-                is not supported dtype.
+                :mod:`shapely` library cannot be imported.
 
         """
         _pandas_helpers.verify_pandas_imports()
 
         if geography_as_object and shapely is None:
             raise ValueError(_NO_SHAPELY_ERROR)
-
-        if bool_dtype is DefaultPandasDTypes.BOOL_DTYPE:
-            bool_dtype = pandas.BooleanDtype()
-
-        if int_dtype is DefaultPandasDTypes.INT_DTYPE:
-            int_dtype = pandas.Int64Dtype()
-
-        if time_dtype is DefaultPandasDTypes.TIME_DTYPE:
-            time_dtype = db_dtypes.TimeDtype()
-
-        if bool_dtype is not None and not hasattr(bool_dtype, "__from_arrow__"):
-            raise ValueError("bool_dtype", _NO_SUPPORTED_DTYPE)
-
-        if int_dtype is not None and not hasattr(int_dtype, "__from_arrow__"):
-            raise ValueError("int_dtype", _NO_SUPPORTED_DTYPE)
-
-        if float_dtype is not None and not hasattr(float_dtype, "__from_arrow__"):
-            raise ValueError("float_dtype", _NO_SUPPORTED_DTYPE)
-
-        if string_dtype is not None and not hasattr(string_dtype, "__from_arrow__"):
-            raise ValueError("string_dtype", _NO_SUPPORTED_DTYPE)
-
-        if (
-            date_dtype is not None
-            and date_dtype is not DefaultPandasDTypes.DATE_DTYPE
-            and not hasattr(date_dtype, "__from_arrow__")
-        ):
-            raise ValueError("date_dtype", _NO_SUPPORTED_DTYPE)
-
-        if datetime_dtype is not None and not hasattr(datetime_dtype, "__from_arrow__"):
-            raise ValueError("datetime_dtype", _NO_SUPPORTED_DTYPE)
-
-        if time_dtype is not None and not hasattr(time_dtype, "__from_arrow__"):
-            raise ValueError("time_dtype", _NO_SUPPORTED_DTYPE)
-
-        if timestamp_dtype is not None and not hasattr(
-            timestamp_dtype, "__from_arrow__"
-        ):
-            raise ValueError("timestamp_dtype", _NO_SUPPORTED_DTYPE)
 
         if dtypes is None:
             dtypes = {}
@@ -2158,29 +1945,25 @@ class RowIterator(HTTPIterator):
             create_bqstorage_client=create_bqstorage_client,
         )
 
-        # Default date dtype is `db_dtypes.DateDtype()` that could cause out of bounds error,
-        # when pyarrow converts date values to nanosecond precision. To avoid the error, we
-        # set the date_as_object parameter to True, if necessary.
-        date_as_object = False
-        if date_dtype is DefaultPandasDTypes.DATE_DTYPE:
-            date_dtype = db_dtypes.DateDtype()
-            date_as_object = not all(
-                self.__can_cast_timestamp_ns(col)
-                for col in record_batch
-                # Type can be date32 or date64 (plus units).
-                # See: https://arrow.apache.org/docs/python/api/datatypes.html
-                if pyarrow.types.is_date(col.type)
-            )
+        # When converting date or timestamp values to nanosecond precision, the result
+        # can be out of pyarrow bounds. To avoid the error when converting to
+        # Pandas, we set the date_as_object or timestamp_as_object parameter to True,
+        # if necessary.
+        date_as_object = not all(
+            self.__can_cast_timestamp_ns(col)
+            for col in record_batch
+            # Type can be date32 or date64 (plus units).
+            # See: https://arrow.apache.org/docs/python/api/datatypes.html
+            if str(col.type).startswith("date")
+        )
 
-        timestamp_as_object = False
-        if datetime_dtype is None and timestamp_dtype is None:
-            timestamp_as_object = not all(
-                self.__can_cast_timestamp_ns(col)
-                for col in record_batch
-                # Type can be datetime and timestamp (plus units and time zone).
-                # See: https://arrow.apache.org/docs/python/api/datatypes.html
-                if pyarrow.types.is_timestamp(col.type)
-            )
+        timestamp_as_object = not all(
+            self.__can_cast_timestamp_ns(col)
+            for col in record_batch
+            # Type can be timestamp (plus units and time zone).
+            # See: https://arrow.apache.org/docs/python/api/datatypes.html
+            if str(col.type).startswith("timestamp")
+        )
 
         if len(record_batch) > 0:
             df = record_batch.to_pandas(
@@ -2188,15 +1971,7 @@ class RowIterator(HTTPIterator):
                 timestamp_as_object=timestamp_as_object,
                 integer_object_nulls=True,
                 types_mapper=_pandas_helpers.default_types_mapper(
-                    date_as_object=date_as_object,
-                    bool_dtype=bool_dtype,
-                    int_dtype=int_dtype,
-                    float_dtype=float_dtype,
-                    string_dtype=string_dtype,
-                    date_dtype=date_dtype,
-                    datetime_dtype=datetime_dtype,
-                    time_dtype=time_dtype,
-                    timestamp_dtype=timestamp_dtype,
+                    date_as_object=date_as_object
                 ),
             )
         else:
@@ -2228,9 +2003,9 @@ class RowIterator(HTTPIterator):
     # changes to job.QueryJob.to_geodataframe()
     def to_geodataframe(
         self,
-        bqstorage_client: Optional["bigquery_storage.BigQueryReadClient"] = None,
+        bqstorage_client: "bigquery_storage.BigQueryReadClient" = None,
         dtypes: Dict[str, Any] = None,
-        progress_bar_type: Optional[str] = None,
+        progress_bar_type: str = None,
         create_bqstorage_client: bool = True,
         geography_column: Optional[str] = None,
     ) -> "geopandas.GeoDataFrame":
@@ -2263,9 +2038,9 @@ class RowIterator(HTTPIterator):
                   No progress bar.
                 ``'tqdm'``
                   Use the :func:`tqdm.tqdm` function to print a progress bar
-                  to :data:`sys.stdout`.
+                  to :data:`sys.stderr`.
                 ``'tqdm_notebook'``
-                  Use the :func:`tqdm.notebook.tqdm` function to display a
+                  Use the :func:`tqdm.tqdm_notebook` function to display a
                   progress bar as a Jupyter notebook widget.
                 ``'tqdm_gui'``
                   Use the :func:`tqdm.tqdm_gui` function to display a
@@ -2382,8 +2157,6 @@ class _EmptyRowIterator(RowIterator):
         Returns:
             pyarrow.Table: An empty :class:`pyarrow.Table`.
         """
-        if pyarrow is None:
-            raise ValueError(_NO_PYARROW_ERROR)
         return pyarrow.Table.from_arrays(())
 
     def to_dataframe(
@@ -2393,14 +2166,6 @@ class _EmptyRowIterator(RowIterator):
         progress_bar_type=None,
         create_bqstorage_client=True,
         geography_as_object=False,
-        bool_dtype=None,
-        int_dtype=None,
-        float_dtype=None,
-        string_dtype=None,
-        date_dtype=None,
-        datetime_dtype=None,
-        time_dtype=None,
-        timestamp_dtype=None,
     ) -> "pandas.DataFrame":
         """Create an empty dataframe.
 
@@ -2409,15 +2174,6 @@ class _EmptyRowIterator(RowIterator):
             dtypes (Any): Ignored. Added for compatibility with RowIterator.
             progress_bar_type (Any): Ignored. Added for compatibility with RowIterator.
             create_bqstorage_client (bool): Ignored. Added for compatibility with RowIterator.
-            geography_as_object (bool): Ignored. Added for compatibility with RowIterator.
-            bool_dtype (Any): Ignored. Added for compatibility with RowIterator.
-            int_dtype (Any): Ignored. Added for compatibility with RowIterator.
-            float_dtype (Any): Ignored. Added for compatibility with RowIterator.
-            string_dtype (Any): Ignored. Added for compatibility with RowIterator.
-            date_dtype (Any): Ignored. Added for compatibility with RowIterator.
-            datetime_dtype (Any): Ignored. Added for compatibility with RowIterator.
-            time_dtype (Any): Ignored. Added for compatibility with RowIterator.
-            timestamp_dtype (Any): Ignored. Added for compatibility with RowIterator.
 
         Returns:
             pandas.DataFrame: An empty :class:`~pandas.DataFrame`.

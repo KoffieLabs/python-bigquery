@@ -97,7 +97,6 @@ Table
     table.Row
     table.RowIterator
     table.SnapshotDefinition
-    table.CloneDefinition
     table.Table
     table.TableListItem
     table.TableReference

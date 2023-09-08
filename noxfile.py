@@ -25,19 +25,11 @@ import nox
 MYPY_VERSION = "mypy==0.910"
 PYTYPE_VERSION = "pytype==2021.4.9"
 BLACK_VERSION = "black==22.3.0"
-BLACK_PATHS = (
-    "docs",
-    "google",
-    "samples",
-    "samples/tests",
-    "tests",
-    "noxfile.py",
-    "setup.py",
-)
+BLACK_PATHS = ("docs", "google", "samples", "tests", "noxfile.py", "setup.py")
 
 DEFAULT_PYTHON_VERSION = "3.8"
-SYSTEM_TEST_PYTHON_VERSIONS = ["3.8", "3.11"]
-UNIT_TEST_PYTHON_VERSIONS = ["3.7", "3.8", "3.9", "3.10", "3.11"]
+SYSTEM_TEST_PYTHON_VERSIONS = ["3.8", "3.10"]
+UNIT_TEST_PYTHON_VERSIONS = ["3.6", "3.7", "3.8", "3.9", "3.10"]
 CURRENT_DIRECTORY = pathlib.Path(__file__).parent.absolute()
 
 # 'docfx' is excluded since it only needs to run in 'docs-presubmit'
@@ -80,8 +72,8 @@ def default(session, install_extras=True):
         constraints_path,
     )
 
-    if install_extras and session.python == "3.11":
-        install_target = ".[bqstorage,ipywidgets,pandas,tqdm,opentelemetry]"
+    if install_extras and session.python == "3.10":
+        install_target = ".[bqstorage,pandas,tqdm,opentelemetry]"
     elif install_extras:
         install_target = ".[all]"
     else:
@@ -168,9 +160,7 @@ def system(session):
         session.skip("Credentials must be set via environment variable.")
 
     # Use pre-release gRPC for system tests.
-    # Exclude version 1.49.0rc1 which has a known issue.
-    # See https://github.com/grpc/grpc/pull/30642
-    session.install("--pre", "grpcio!=1.49.0rc1", "-c", constraints_path)
+    session.install("--pre", "grpcio", "-c", constraints_path)
 
     # Install all test dependencies, then install local packages in place.
     session.install(
@@ -185,8 +175,8 @@ def system(session):
     # Data Catalog needed for the column ACL test with a real Policy Tag.
     session.install("google-cloud-datacatalog", "-c", constraints_path)
 
-    if session.python == "3.11":
-        extras = "[bqstorage,ipywidgets,pandas,tqdm,opentelemetry]"
+    if session.python == "3.10":
+        extras = "[bqstorage,pandas,tqdm,opentelemetry]"
     else:
         extras = "[all]"
     session.install("-e", f".{extras}", "-c", constraints_path)
@@ -200,22 +190,12 @@ def mypy_samples(session):
     """Run type checks with mypy."""
     session.install("-e", ".[all]")
 
-    session.install("pytest")
-    for requirements_path in CURRENT_DIRECTORY.glob("samples/*/requirements.txt"):
-        session.install("-r", requirements_path)
+    session.install("ipython", "pytest")
     session.install(MYPY_VERSION)
 
     # Just install the dependencies' type info directly, since "mypy --install-types"
     # might require an additional pass.
-    session.install(
-        "types-mock",
-        "types-pytz",
-        "types-protobuf",
-        "types-python-dateutil",
-        "types-requests",
-        "types-setuptools",
-    )
-
+    session.install("types-mock", "types-pytz")
     session.install("typing-extensions")  # for TypedDict in pre-3.8 Python versions
 
     session.run(
@@ -244,8 +224,8 @@ def snippets(session):
     session.install("google-cloud-storage", "-c", constraints_path)
     session.install("grpcio", "-c", constraints_path)
 
-    if session.python == "3.11":
-        extras = "[bqstorage,ipywidgets,pandas,tqdm,opentelemetry]"
+    if session.python == "3.10":
+        extras = "[bqstorage,pandas,tqdm,opentelemetry]"
     else:
         extras = "[all]"
     session.install("-e", f".{extras}", "-c", constraints_path)
@@ -300,15 +280,6 @@ def prerelease_deps(session):
         "--upgrade",
         "pandas",
     )
-    session.install(
-        "--pre",
-        "--upgrade",
-        "IPython",
-        "ipykernel",
-        "ipywidgets",
-        "tqdm",
-        "git+https://github.com/pypa/packaging.git",
-    )
 
     session.install(
         "--pre",
@@ -317,14 +288,14 @@ def prerelease_deps(session):
         "google-cloud-bigquery-storage",
         "google-cloud-core",
         "google-resumable-media",
-        # Exclude version 1.49.0rc1 which has a known issue. See https://github.com/grpc/grpc/pull/30642
-        "grpcio!=1.49.0rc1",
+        "grpcio",
     )
     session.install(
         "freezegun",
         "google-cloud-datacatalog",
         "google-cloud-storage",
         "google-cloud-testutils",
+        "IPython",
         "mock",
         "psutil",
         "pytest",
@@ -359,7 +330,6 @@ def prerelease_deps(session):
     session.run("python", "-c", "import grpc; print(grpc.__version__)")
     session.run("python", "-c", "import pandas; print(pandas.__version__)")
     session.run("python", "-c", "import pyarrow; print(pyarrow.__version__)")
-    session.run("python", "-m", "pip", "freeze")
 
     # Run all tests, except a few samples tests which require extra dependencies.
     session.run("py.test", "tests/unit")
@@ -375,9 +345,7 @@ def lint(session):
     serious code quality issues.
     """
 
-    # Pin flake8 to 6.0.0
-    # See https://github.com/googleapis/python-bigquery/issues/1635
-    session.install("flake8==6.0.0", BLACK_VERSION)
+    session.install("flake8", BLACK_VERSION)
     session.install("-e", ".")
     session.run("flake8", os.path.join("google", "cloud", "bigquery"))
     session.run("flake8", "tests")
@@ -404,11 +372,11 @@ def blacken(session):
     session.run("black", *BLACK_PATHS)
 
 
-@nox.session(python="3.9")
+@nox.session(python=DEFAULT_PYTHON_VERSION)
 def docs(session):
     """Build the docs."""
 
-    session.install("recommonmark", "sphinx==4.0.2", "sphinx_rtd_theme")
+    session.install("recommonmark", "sphinx==4.0.1", "sphinx_rtd_theme")
     session.install("google-cloud-storage")
     session.install("-e", ".[all]")
 
@@ -427,15 +395,13 @@ def docs(session):
     )
 
 
-@nox.session(python="3.9")
+@nox.session(python=DEFAULT_PYTHON_VERSION)
 def docfx(session):
     """Build the docfx yaml files for this library."""
 
     session.install("-e", ".")
     session.install(
-        "gcp-sphinx-docfx-yaml",
-        "alabaster",
-        "recommonmark",
+        "sphinx==4.0.1", "alabaster", "recommonmark", "gcp-sphinx-docfx-yaml"
     )
 
     shutil.rmtree(os.path.join("docs", "_build"), ignore_errors=True)

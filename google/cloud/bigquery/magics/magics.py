@@ -125,7 +125,7 @@ class Context(object):
         self._default_query_job_config = bigquery.QueryJobConfig()
         self._bigquery_client_options = client_options.ClientOptions()
         self._bqstorage_client_options = client_options.ClientOptions()
-        self._progress_bar_type = "tqdm_notebook"
+        self._progress_bar_type = "tqdm"
 
     @property
     def credentials(self):
@@ -269,7 +269,7 @@ class Context(object):
             Manually setting the progress_bar_type:
 
             >>> from google.cloud.bigquery import magics
-            >>> magics.context.progress_bar_type = "tqdm_notebook"
+            >>> magics.context.progress_bar_type = "tqdm"
         """
         return self._progress_bar_type
 
@@ -286,7 +286,7 @@ def _handle_error(error, destination_var=None):
 
     Args:
         error (Exception):
-            An exception that ocurred during the query execution.
+            An exception that ocurred during the query exectution.
         destination_var (Optional[str]):
             The name of the IPython session variable to store the query job.
     """
@@ -329,25 +329,22 @@ def _run_query(client, query, job_config=None):
         Query complete after 2.07s
         'bf633912-af2c-4780-b568-5d868058632b'
     """
-    start_time = time.perf_counter()
+    start_time = time.time()
     query_job = client.query(query, job_config=job_config)
 
     if job_config and job_config.dry_run:
         return query_job
 
-    print(f"Executing query with job ID: {query_job.job_id}")
+    print("Executing query with job ID: {}".format(query_job.job_id))
 
     while True:
-        print(
-            f"\rQuery executing: {time.perf_counter() - start_time:.2f}s".format(),
-            end="",
-        )
+        print("\rQuery executing: {:0.2f}s".format(time.time() - start_time), end="")
         try:
             query_job.result(timeout=0.5)
             break
         except futures.TimeoutError:
             continue
-    print(f"\nJob ID {query_job.job_id} successfully executed")
+    print("\nQuery complete after {:0.2f}s".format(time.time() - start_time))
     return query_job
 
 
@@ -368,7 +365,7 @@ def _create_dataset_if_necessary(client, dataset_id):
         pass
     dataset = bigquery.Dataset(dataset_reference)
     dataset.location = client.location
-    print(f"Creating dataset: {dataset_id}")
+    print("Creating dataset: {}".format(dataset_id))
     dataset = client.create_dataset(dataset)
 
 
@@ -503,7 +500,7 @@ def _create_dataset_if_necessary(client, dataset_id):
     default=None,
     help=(
         "Sets progress bar type to display a progress bar while executing the query."
-        "Defaults to use tqdm_notebook. Install the ``tqdm`` package to use this feature."
+        "Defaults to use tqdm. Install the ``tqdm`` package to use this feature."
     ),
 )
 def _cell_magic(line, query):
@@ -746,17 +743,6 @@ def _split_args_line(line):
 def _make_bqstorage_client(client, use_bqstorage_api, client_options):
     if not use_bqstorage_api:
         return None
-
-    try:
-        from google.cloud import bigquery_storage  # type: ignore # noqa: F401
-    except ImportError as err:
-        customized_error = ImportError(
-            "The default BigQuery Storage API client cannot be used, install "
-            "the missing google-cloud-bigquery-storage and pyarrow packages "
-            "to use it. Alternatively, use the classic REST API by specifying "
-            "the --use_rest_api magic option."
-        )
-        raise customized_error from err
 
     try:
         from google.api_core.gapic_v1 import client_info as gapic_client_info

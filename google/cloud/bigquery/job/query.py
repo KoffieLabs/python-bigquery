@@ -28,7 +28,7 @@ from google.cloud.bigquery.dataset import Dataset
 from google.cloud.bigquery.dataset import DatasetListItem
 from google.cloud.bigquery.dataset import DatasetReference
 from google.cloud.bigquery.encryption_configuration import EncryptionConfiguration
-from google.cloud.bigquery.enums import KeyResultStatementKind, DefaultPandasDTypes
+from google.cloud.bigquery.enums import KeyResultStatementKind
 from google.cloud.bigquery.external_config import ExternalConfig
 from google.cloud.bigquery import _helpers
 from google.cloud.bigquery.query import (
@@ -52,16 +52,6 @@ from google.cloud.bigquery._tqdm_helpers import wait_for_query
 from google.cloud.bigquery.job.base import _AsyncJob
 from google.cloud.bigquery.job.base import _JobConfig
 from google.cloud.bigquery.job.base import _JobReference
-
-try:
-    import pandas  # type: ignore
-except ImportError:  # pragma: NO COVER
-    pandas = None
-
-try:
-    import db_dtypes  # type: ignore
-except ImportError:  # pragma: NO COVER
-    db_dtypes = None
 
 if typing.TYPE_CHECKING:  # pragma: NO COVER
     # Assumption: type checks are only used by library developers and CI environments
@@ -196,59 +186,6 @@ class DmlStats(typing.NamedTuple):
             for api_field, default_val in zip(api_fields, cls.__new__.__defaults__)  # type: ignore
         )
         return cls(*args)
-
-
-class IndexUnusedReason(typing.NamedTuple):
-    """Reason about why no search index was used in the search query (or sub-query).
-
-    https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#indexunusedreason
-    """
-
-    code: Optional[str] = None
-    """Specifies the high-level reason for the scenario when no search index was used.
-    """
-
-    message: Optional[str] = None
-    """Free form human-readable reason for the scenario when no search index was used.
-    """
-
-    baseTable: Optional[TableReference] = None
-    """Specifies the base table involved in the reason that no search index was used.
-    """
-
-    indexName: Optional[str] = None
-    """Specifies the name of the unused search index, if available."""
-
-    @classmethod
-    def from_api_repr(cls, reason):
-        code = reason.get("code")
-        message = reason.get("message")
-        baseTable = reason.get("baseTable")
-        indexName = reason.get("indexName")
-
-        return cls(code, message, baseTable, indexName)
-
-
-class SearchStats(typing.NamedTuple):
-    """Statistics related to Search Queries. Populated as part of JobStatistics2.
-
-    https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#searchstatistics
-    """
-
-    mode: Optional[str] = None
-    """Indicates the type of search index usage in the entire search query."""
-
-    reason: List[IndexUnusedReason] = []
-    """Reason about why no search index was used in the search query (or sub-query)"""
-
-    @classmethod
-    def from_api_repr(cls, stats: Dict[str, Any]):
-        mode = stats.get("indexUsageMode", None)
-        reason = [
-            IndexUnusedReason.from_api_repr(r)
-            for r in stats.get("indexUnusedReasons", [])
-        ]
-        return cls(mode, reason)
 
 
 class ScriptOptions:
@@ -777,6 +714,7 @@ class QueryJobConfig(_JobConfig):
             Dict: A dictionary in the format used by the BigQuery API.
         """
         resource = copy.deepcopy(self._properties)
+
         # Query parameters have an addition property associated with them
         # to indicate if the query is using named or positional parameters.
         query_parameters = resource["query"].get("queryParameters")
@@ -807,20 +745,23 @@ class QueryJob(_AsyncJob):
 
     _JOB_TYPE = "query"
     _UDF_KEY = "userDefinedFunctionResources"
-    _CONFIG_CLASS = QueryJobConfig
 
     def __init__(self, job_id, query, client, job_config=None):
         super(QueryJob, self).__init__(job_id, client)
 
-        if job_config is not None:
-            self._properties["configuration"] = job_config._properties
-        if self.configuration.use_legacy_sql is None:
-            self.configuration.use_legacy_sql = False
+        if job_config is None:
+            job_config = QueryJobConfig()
+        if job_config.use_legacy_sql is None:
+            job_config.use_legacy_sql = False
+
+        self._properties["configuration"] = job_config._properties
+        self._configuration = job_config
 
         if query:
             _helpers._set_sub_prop(
                 self._properties, ["configuration", "query", "query"], query
             )
+
         self._query_results = None
         self._done_timeout = None
         self._transport_timeout = None
@@ -830,12 +771,7 @@ class QueryJob(_AsyncJob):
         """See
         :attr:`google.cloud.bigquery.job.QueryJobConfig.allow_large_results`.
         """
-        return self.configuration.allow_large_results
-
-    @property
-    def configuration(self) -> QueryJobConfig:
-        """The configuration for this query job."""
-        return typing.cast(QueryJobConfig, super().configuration)
+        return self._configuration.allow_large_results
 
     @property
     def connection_properties(self) -> List[ConnectionProperty]:
@@ -844,14 +780,14 @@ class QueryJob(_AsyncJob):
 
         .. versionadded:: 2.29.0
         """
-        return self.configuration.connection_properties
+        return self._configuration.connection_properties
 
     @property
     def create_disposition(self):
         """See
         :attr:`google.cloud.bigquery.job.QueryJobConfig.create_disposition`.
         """
-        return self.configuration.create_disposition
+        return self._configuration.create_disposition
 
     @property
     def create_session(self) -> Optional[bool]:
@@ -860,21 +796,21 @@ class QueryJob(_AsyncJob):
 
         .. versionadded:: 2.29.0
         """
-        return self.configuration.create_session
+        return self._configuration.create_session
 
     @property
     def default_dataset(self):
         """See
         :attr:`google.cloud.bigquery.job.QueryJobConfig.default_dataset`.
         """
-        return self.configuration.default_dataset
+        return self._configuration.default_dataset
 
     @property
     def destination(self):
         """See
         :attr:`google.cloud.bigquery.job.QueryJobConfig.destination`.
         """
-        return self.configuration.destination
+        return self._configuration.destination
 
     @property
     def destination_encryption_configuration(self):
@@ -887,37 +823,28 @@ class QueryJob(_AsyncJob):
         See
         :attr:`google.cloud.bigquery.job.QueryJobConfig.destination_encryption_configuration`.
         """
-        return self.configuration.destination_encryption_configuration
+        return self._configuration.destination_encryption_configuration
 
     @property
     def dry_run(self):
         """See
         :attr:`google.cloud.bigquery.job.QueryJobConfig.dry_run`.
         """
-        return self.configuration.dry_run
+        return self._configuration.dry_run
 
     @property
     def flatten_results(self):
         """See
         :attr:`google.cloud.bigquery.job.QueryJobConfig.flatten_results`.
         """
-        return self.configuration.flatten_results
+        return self._configuration.flatten_results
 
     @property
     def priority(self):
         """See
         :attr:`google.cloud.bigquery.job.QueryJobConfig.priority`.
         """
-        return self.configuration.priority
-
-    @property
-    def search_stats(self) -> Optional[SearchStats]:
-        """Returns a SearchStats object."""
-
-        stats = self._job_statistics().get("searchStatistics")
-        if stats is not None:
-            return SearchStats.from_api_repr(stats)
-        return None
+        return self._configuration.priority
 
     @property
     def query(self):
@@ -935,90 +862,90 @@ class QueryJob(_AsyncJob):
         """See
         :attr:`google.cloud.bigquery.job.QueryJobConfig.query_parameters`.
         """
-        return self.configuration.query_parameters
+        return self._configuration.query_parameters
 
     @property
     def udf_resources(self):
         """See
         :attr:`google.cloud.bigquery.job.QueryJobConfig.udf_resources`.
         """
-        return self.configuration.udf_resources
+        return self._configuration.udf_resources
 
     @property
     def use_legacy_sql(self):
         """See
         :attr:`google.cloud.bigquery.job.QueryJobConfig.use_legacy_sql`.
         """
-        return self.configuration.use_legacy_sql
+        return self._configuration.use_legacy_sql
 
     @property
     def use_query_cache(self):
         """See
         :attr:`google.cloud.bigquery.job.QueryJobConfig.use_query_cache`.
         """
-        return self.configuration.use_query_cache
+        return self._configuration.use_query_cache
 
     @property
     def write_disposition(self):
         """See
         :attr:`google.cloud.bigquery.job.QueryJobConfig.write_disposition`.
         """
-        return self.configuration.write_disposition
+        return self._configuration.write_disposition
 
     @property
     def maximum_billing_tier(self):
         """See
         :attr:`google.cloud.bigquery.job.QueryJobConfig.maximum_billing_tier`.
         """
-        return self.configuration.maximum_billing_tier
+        return self._configuration.maximum_billing_tier
 
     @property
     def maximum_bytes_billed(self):
         """See
         :attr:`google.cloud.bigquery.job.QueryJobConfig.maximum_bytes_billed`.
         """
-        return self.configuration.maximum_bytes_billed
+        return self._configuration.maximum_bytes_billed
 
     @property
     def range_partitioning(self):
         """See
         :attr:`google.cloud.bigquery.job.QueryJobConfig.range_partitioning`.
         """
-        return self.configuration.range_partitioning
+        return self._configuration.range_partitioning
 
     @property
     def table_definitions(self):
         """See
         :attr:`google.cloud.bigquery.job.QueryJobConfig.table_definitions`.
         """
-        return self.configuration.table_definitions
+        return self._configuration.table_definitions
 
     @property
     def time_partitioning(self):
         """See
         :attr:`google.cloud.bigquery.job.QueryJobConfig.time_partitioning`.
         """
-        return self.configuration.time_partitioning
+        return self._configuration.time_partitioning
 
     @property
     def clustering_fields(self):
         """See
         :attr:`google.cloud.bigquery.job.QueryJobConfig.clustering_fields`.
         """
-        return self.configuration.clustering_fields
+        return self._configuration.clustering_fields
 
     @property
     def schema_update_options(self):
         """See
         :attr:`google.cloud.bigquery.job.QueryJobConfig.schema_update_options`.
         """
-        return self.configuration.schema_update_options
+        return self._configuration.schema_update_options
 
     def to_api_repr(self):
         """Generate a resource for :meth:`_begin`."""
         # Use to_api_repr to allow for some configuration properties to be set
         # automatically.
-        configuration = self.configuration.to_api_repr()
+        configuration = self._configuration.to_api_repr()
         return {
             "jobReference": self._properties["jobReference"],
             "configuration": configuration,
@@ -1330,7 +1257,7 @@ class QueryJob(_AsyncJob):
         """
         template = "{message}\n\n{header}\n\n{ruler}\n{body}\n{ruler}"
 
-        lines = query.splitlines() if query is not None else [""]
+        lines = query.splitlines()
         max_line_len = max(len(line) for line in lines)
 
         header = "-----Query Job SQL Follows-----"
@@ -1378,7 +1305,7 @@ class QueryJob(_AsyncJob):
             raise
 
     def _reload_query_results(
-        self, retry: "retries.Retry" = DEFAULT_RETRY, timeout: Optional[float] = None
+        self, retry: "retries.Retry" = DEFAULT_RETRY, timeout: float = None
     ):
         """Refresh the cached query results.
 
@@ -1397,16 +1324,7 @@ class QueryJob(_AsyncJob):
         # the timeout from the futures API is respected. See:
         # https://github.com/GoogleCloudPlatform/google-cloud-python/issues/4135
         timeout_ms = None
-
-        # Python_API_core, as part of a major rewrite of the deadline, timeout,
-        # retry process sets the timeout value as a Python object().
-        # Our system does not natively handle that and instead expects
-        # either none or a numeric value. If passed a Python object, convert to
-        # None.
-        if isinstance(self._done_timeout, object):  # pragma: NO COVER
-            self._done_timeout = None
-
-        if self._done_timeout is not None:  # pragma: NO COVER
+        if self._done_timeout is not None:
             # Subtract a buffer for context switching, network latency, etc.
             api_timeout = self._done_timeout - _TIMEOUT_BUFFER_SECS
             api_timeout = max(min(api_timeout, 10), 0)
@@ -1463,11 +1381,11 @@ class QueryJob(_AsyncJob):
 
     def result(  # type: ignore  # (complaints about the overloaded signature)
         self,
-        page_size: Optional[int] = None,
-        max_results: Optional[int] = None,
+        page_size: int = None,
+        max_results: int = None,
         retry: "retries.Retry" = DEFAULT_RETRY,
-        timeout: Optional[float] = None,
-        start_index: Optional[int] = None,
+        timeout: float = None,
+        start_index: int = None,
         job_retry: "retries.Retry" = DEFAULT_JOB_RETRY,
     ) -> Union["RowIterator", _EmptyRowIterator]:
         """Start the job and wait for it to complete and get the result.
@@ -1618,7 +1536,7 @@ class QueryJob(_AsyncJob):
     # that should only exist here in the QueryJob method.
     def to_arrow(
         self,
-        progress_bar_type: Optional[str] = None,
+        progress_bar_type: str = None,
         bqstorage_client: Optional["bigquery_storage.BigQueryReadClient"] = None,
         create_bqstorage_client: bool = True,
         max_results: Optional[int] = None,
@@ -1638,9 +1556,9 @@ class QueryJob(_AsyncJob):
                   No progress bar.
                 ``'tqdm'``
                   Use the :func:`tqdm.tqdm` function to print a progress bar
-                  to :data:`sys.stdout`.
+                  to :data:`sys.stderr`.
                 ``'tqdm_notebook'``
-                  Use the :func:`tqdm.notebook.tqdm` function to display a
+                  Use the :func:`tqdm.tqdm_notebook` function to display a
                   progress bar as a Jupyter notebook widget.
                 ``'tqdm_gui'``
                   Use the :func:`tqdm.tqdm_gui` function to display a
@@ -1675,10 +1593,6 @@ class QueryJob(_AsyncJob):
                 headers from the query results. The column headers are derived
                 from the destination table's schema.
 
-        Raises:
-            ValueError:
-                If the :mod:`pyarrow` library cannot be imported.
-
         .. versionadded:: 1.17.0
         """
         query_result = wait_for_query(self, progress_bar_type, max_results=max_results)
@@ -1695,18 +1609,10 @@ class QueryJob(_AsyncJob):
         self,
         bqstorage_client: Optional["bigquery_storage.BigQueryReadClient"] = None,
         dtypes: Dict[str, Any] = None,
-        progress_bar_type: Optional[str] = None,
+        progress_bar_type: str = None,
         create_bqstorage_client: bool = True,
         max_results: Optional[int] = None,
         geography_as_object: bool = False,
-        bool_dtype: Union[Any, None] = DefaultPandasDTypes.BOOL_DTYPE,
-        int_dtype: Union[Any, None] = DefaultPandasDTypes.INT_DTYPE,
-        float_dtype: Union[Any, None] = None,
-        string_dtype: Union[Any, None] = None,
-        date_dtype: Union[Any, None] = DefaultPandasDTypes.DATE_DTYPE,
-        datetime_dtype: Union[Any, None] = None,
-        time_dtype: Union[Any, None] = DefaultPandasDTypes.TIME_DTYPE,
-        timestamp_dtype: Union[Any, None] = None,
     ) -> "pandas.DataFrame":
         """Return a pandas DataFrame from a QueryJob
 
@@ -1759,89 +1665,6 @@ class QueryJob(_AsyncJob):
 
                 .. versionadded:: 2.24.0
 
-            bool_dtype (Optional[pandas.Series.dtype, None]):
-                If set, indicate a pandas ExtensionDtype (e.g. ``pandas.BooleanDtype()``)
-                to convert BigQuery Boolean type, instead of relying on the default
-                ``pandas.BooleanDtype()``. If you explicitly set the value to ``None``,
-                then the data type will be ``numpy.dtype("bool")``. BigQuery Boolean
-                type can be found at:
-                https://cloud.google.com/bigquery/docs/reference/standard-sql/data-types#boolean_type
-
-                .. versionadded:: 3.8.0
-
-            int_dtype (Optional[pandas.Series.dtype, None]):
-                If set, indicate a pandas ExtensionDtype (e.g. ``pandas.Int64Dtype()``)
-                to convert BigQuery Integer types, instead of relying on the default
-                ``pandas.Int64Dtype()``. If you explicitly set the value to ``None``,
-                then the data type will be ``numpy.dtype("int64")``. A list of BigQuery
-                Integer types can be found at:
-                https://cloud.google.com/bigquery/docs/reference/standard-sql/data-types#integer_types
-
-                .. versionadded:: 3.8.0
-
-            float_dtype (Optional[pandas.Series.dtype, None]):
-                If set, indicate a pandas ExtensionDtype (e.g. ``pandas.Float32Dtype()``)
-                to convert BigQuery Float type, instead of relying on the default
-                ``numpy.dtype("float64")``. If you explicitly set the value to ``None``,
-                then the data type will be ``numpy.dtype("float64")``. BigQuery Float
-                type can be found at:
-                https://cloud.google.com/bigquery/docs/reference/standard-sql/data-types#floating_point_types
-
-                .. versionadded:: 3.8.0
-
-            string_dtype (Optional[pandas.Series.dtype, None]):
-                If set, indicate a pandas ExtensionDtype (e.g. ``pandas.StringDtype()``) to
-                convert BigQuery String type, instead of relying on the default
-                ``numpy.dtype("object")``. If you explicitly set the value to ``None``,
-                then the data type will be ``numpy.dtype("object")``. BigQuery String
-                type can be found at:
-                https://cloud.google.com/bigquery/docs/reference/standard-sql/data-types#string_type
-
-                .. versionadded:: 3.8.0
-
-            date_dtype (Optional[pandas.Series.dtype, None]):
-                If set, indicate a pandas ExtensionDtype (e.g.
-                ``pandas.ArrowDtype(pyarrow.date32())``) to convert BigQuery Date
-                type, instead of relying on the default ``db_dtypes.DateDtype()``.
-                If you explicitly set the value to ``None``, then the data type will be
-                ``numpy.dtype("datetime64[ns]")`` or ``object`` if out of bound. BigQuery
-                Date type can be found at:
-                https://cloud.google.com/bigquery/docs/reference/standard-sql/data-types#date_type
-
-                .. versionadded:: 3.10.0
-
-            datetime_dtype (Optional[pandas.Series.dtype, None]):
-                If set, indicate a pandas ExtensionDtype (e.g.
-                ``pandas.ArrowDtype(pyarrow.timestamp("us"))``) to convert BigQuery Datetime
-                type, instead of relying on the default ``numpy.dtype("datetime64[ns]``.
-                If you explicitly set the value to ``None``, then the data type will be
-                ``numpy.dtype("datetime64[ns]")`` or ``object`` if out of bound. BigQuery
-                Datetime type can be found at:
-                https://cloud.google.com/bigquery/docs/reference/standard-sql/data-types#datetime_type
-
-                .. versionadded:: 3.10.0
-
-            time_dtype (Optional[pandas.Series.dtype, None]):
-                If set, indicate a pandas ExtensionDtype (e.g.
-                ``pandas.ArrowDtype(pyarrow.time64("us"))``) to convert BigQuery Time
-                type, instead of relying on the default ``db_dtypes.TimeDtype()``.
-                If you explicitly set the value to ``None``, then the data type will be
-                ``numpy.dtype("object")``. BigQuery Time type can be found at:
-                https://cloud.google.com/bigquery/docs/reference/standard-sql/data-types#time_type
-
-                .. versionadded:: 3.10.0
-
-            timestamp_dtype (Optional[pandas.Series.dtype, None]):
-                If set, indicate a pandas ExtensionDtype (e.g.
-                ``pandas.ArrowDtype(pyarrow.timestamp("us", tz="UTC"))``) to convert BigQuery Timestamp
-                type, instead of relying on the default ``numpy.dtype("datetime64[ns, UTC]")``.
-                If you explicitly set the value to ``None``, then the data type will be
-                ``numpy.dtype("datetime64[ns, UTC]")`` or ``object`` if out of bound. BigQuery
-                Datetime type can be found at:
-                https://cloud.google.com/bigquery/docs/reference/standard-sql/data-types#timestamp_type
-
-                .. versionadded:: 3.10.0
-
         Returns:
             pandas.DataFrame:
                 A :class:`~pandas.DataFrame` populated with row data
@@ -1864,14 +1687,6 @@ class QueryJob(_AsyncJob):
             progress_bar_type=progress_bar_type,
             create_bqstorage_client=create_bqstorage_client,
             geography_as_object=geography_as_object,
-            bool_dtype=bool_dtype,
-            int_dtype=int_dtype,
-            float_dtype=float_dtype,
-            string_dtype=string_dtype,
-            date_dtype=date_dtype,
-            datetime_dtype=datetime_dtype,
-            time_dtype=time_dtype,
-            timestamp_dtype=timestamp_dtype,
         )
 
     # If changing the signature of this method, make sure to apply the same
@@ -1879,9 +1694,9 @@ class QueryJob(_AsyncJob):
     # that should only exist here in the QueryJob method.
     def to_geodataframe(
         self,
-        bqstorage_client: Optional["bigquery_storage.BigQueryReadClient"] = None,
+        bqstorage_client: "bigquery_storage.BigQueryReadClient" = None,
         dtypes: Dict[str, Any] = None,
-        progress_bar_type: Optional[str] = None,
+        progress_bar_type: str = None,
         create_bqstorage_client: bool = True,
         max_results: Optional[int] = None,
         geography_column: Optional[str] = None,

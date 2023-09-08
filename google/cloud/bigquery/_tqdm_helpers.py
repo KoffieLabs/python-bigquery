@@ -15,7 +15,6 @@
 """Shared helper functions for tqdm progress bar."""
 
 import concurrent.futures
-import sys
 import time
 import typing
 from typing import Optional
@@ -23,8 +22,6 @@ import warnings
 
 try:
     import tqdm  # type: ignore
-    import tqdm.notebook as notebook  # type: ignore
-
 except ImportError:  # pragma: NO COVER
     tqdm = None
 
@@ -49,22 +46,9 @@ def get_progress_bar(progress_bar_type, description, total, unit):
 
     try:
         if progress_bar_type == "tqdm":
-            return tqdm.tqdm(
-                bar_format="{l_bar}{bar}|",
-                colour="green",
-                desc=description,
-                file=sys.stdout,
-                total=total,
-                unit=unit,
-            )
+            return tqdm.tqdm(desc=description, total=total, unit=unit)
         elif progress_bar_type == "tqdm_notebook":
-            return notebook.tqdm(
-                bar_format="{l_bar}{bar}|",
-                desc=description,
-                file=sys.stdout,
-                total=total,
-                unit=unit,
-            )
+            return tqdm.tqdm_notebook(desc=description, total=total, unit=unit)
         elif progress_bar_type == "tqdm_gui":
             return tqdm.tqdm_gui(desc=description, total=total, unit=unit)
     except (KeyError, TypeError):
@@ -95,7 +79,7 @@ def wait_for_query(
     """
     default_total = 1
     current_stage = None
-    start_time = time.perf_counter()
+    start_time = time.time()
 
     progress_bar = get_progress_bar(
         progress_bar_type, "Query is running", default_total, "query"
@@ -110,7 +94,11 @@ def wait_for_query(
             current_stage = query_job.query_plan[i]
             progress_bar.total = len(query_job.query_plan)
             progress_bar.set_description(
-                f"Query executing stage {current_stage.name} and status {current_stage.status} : {time.perf_counter() - start_time:.2f}s"
+                "Query executing stage {} and status {} : {:0.2f}s".format(
+                    current_stage.name,
+                    current_stage.status,
+                    time.time() - start_time,
+                ),
             )
         try:
             query_result = query_job.result(
@@ -118,7 +106,7 @@ def wait_for_query(
             )
             progress_bar.update(default_total)
             progress_bar.set_description(
-                f"Job ID {query_job.job_id} successfully executed",
+                "Query complete after {:0.2f}s".format(time.time() - start_time),
             )
             break
         except concurrent.futures.TimeoutError:

@@ -15,22 +15,16 @@
 import datetime
 import decimal
 from unittest import mock
-import pkg_resources
 
+import pyarrow
 import pytest
 
 from google.cloud import bigquery
 
 pandas = pytest.importorskip("pandas")
-pyarrow = pytest.importorskip("pyarrow", minversion="3.0.0")
 
 
 TEST_PATH = "/v1/project/test-proj/dataset/test-dset/table/test-tbl/data"
-
-if pandas is not None:  # pragma: NO COVER
-    PANDAS_INSTALLED_VERSION = pkg_resources.get_distribution("pandas").parsed_version
-else:  # pragma: NO COVER
-    PANDAS_INSTALLED_VERSION = pkg_resources.parse_version("0.0.0")
 
 
 @pytest.fixture
@@ -40,9 +34,6 @@ def class_under_test():
     return RowIterator
 
 
-@pytest.mark.skipif(
-    PANDAS_INSTALLED_VERSION >= pkg_resources.parse_version("2.0.0"), reason=""
-)
 def test_to_dataframe_nullable_scalars(monkeypatch, class_under_test):
     # See tests/system/test_arrow.py for the actual types we get from the API.
     arrow_schema = pyarrow.schema(
